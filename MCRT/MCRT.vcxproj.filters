@@ -24,6 +24,9 @@
     <ClCompile Include="Scene.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="Tracer.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Scene.h">
@@ -35,5 +38,11 @@
     <ClInclude Include="Vector.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="Tracer.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
   </ItemGroup>
 </Project>

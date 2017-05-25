@@ -1,12 +1,14 @@
 #include <iostream>
 
 #include "Scene.h"
+#include "Tracer.h"
 
 using namespace std;
 
-int main(int argc, const char *argv[])
+int main(int argc, char *argv[])
 {
 	Scene s("scene01.obj");
-	system("pause");
+	Tracer t(argc, argv);
+	t.run();
 	return 0;
 }
