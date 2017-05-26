@@ -7,8 +7,8 @@ using namespace std;
 
 int main(int argc, char *argv[])
 {
-	Scene s("scene01.obj");
+	Scene s("cube.obj");
 	Tracer t(argc, argv);
-	t.run();
+	t.run(s);
 	return 0;
 }

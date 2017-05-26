@@ -23,17 +23,19 @@ struct SceneGroup
 	std::vector<TriangleFace *> faces;
 	bool smooth;
 	Material *mat;
+
+	SceneGroup() : mat(0), smooth(false) {};
 };
 
 class Scene
 {
 private:
 	MaterialLibrary _matLib;
-	std::vector<SceneGroup> _groups;
-	std::vector<Eigen::Vector3f> _vertices;
-	std::vector<Eigen::Vector2f> _textureCoords;
-	std::vector<Eigen::Vector3f> _normals;
-	std::vector<TriangleFace> _faces;
+	std::vector<SceneGroup *> _groups;
+	std::vector<Eigen::Vector3f *> _vertices;
+	std::vector<Eigen::Vector2f *> _textureCoords;
+	std::vector<Eigen::Vector3f *> _normals;
+	std::vector<TriangleFace *> _faces;
 
 public:
 	Scene() {};
@@ -47,7 +49,12 @@ public:
 	* Free after use
 	* groups: vertices index | normals index | vertex count | material index
 	* vertices: vertices | normals
+	* bbox: min | max
 	* materials: MaterialData (11 * float)
 	*/
-	void getGroupBuffers(int **grpBuf, float **vtxBuf, float **matBuf);
+	void getGroupBuffers(
+		int **grpBuf, size_t *grpBufLen,
+		float **vtxBuf, size_t *vtxBufLen,
+		float **bboxBuf, size_t *bboxBufLen,
+		float **matBuf, size_t *matBufLen);
 };
