@@ -41,8 +41,20 @@
     <ClInclude Include="Tracer.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="Types.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="quad.frag">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="quad.vert">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="trace.comp">
+      <Filter>资源文件</Filter>
+    </None>
   </ItemGroup>
 </Project>

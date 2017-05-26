@@ -1,0 +1,267 @@
+#version 430 core
+
+layout(binding = 0, rgba32f) uniform image2D framebuffer;
+
+uniform vec3 eye;
+uniform vec3 ray00;
+uniform vec3 ray01;
+uniform vec3 ray10;
+uniform vec3 ray11;
+uniform vec2 sample_offset;
+uniform int frame;
+
+#define MAX_SCENE_BOUNDS    100.0
+#define NUM_BOXES           1
+#define EPS                 0.000001
+
+const vec3 lightpos = vec3(-1.5, -1.5, 2.5);
+
+const vec3 intensity = vec3(0.8, 0.8, 0.8);
+const vec3 ambient = vec3(0.2, 0.2, 0.2);
+const vec3 specular = vec3(0.75, 0.75, 0.75);
+
+struct bbox_t
+{
+    float xmin, ymin, zmin;
+    float xmax, ymax, zmax;
+};
+
+struct mesh_desc_t
+{
+    int vptr;
+    int nptr;
+    int num_vertices;
+    int material_id;
+};
+
+struct material_desc_t
+{
+    float Ka, Kd, Ks, Kr, shininess;
+};
+
+struct hitinfo_t
+{
+    float t;
+    int hit_mesh;
+    int hit_vptr;
+    int hit_nptr;
+};
+
+layout(std430, binding = 1) buffer Materials
+{
+    material_desc_t materials [];
+};
+
+layout(std430, binding = 2) buffer BoundingBoxes
+{
+    bbox_t box [];
+};
+
+layout(std430, binding = 3) buffer MeshDesc
+{
+    mesh_desc_t desc [];
+};
+
+layout(std430, binding = 4) buffer Meshes
+{
+    float data [];
+};
+
+const vec3 diffuse[] = {
+    vec3(0.5, 0.5, 0.5),
+    vec3(0.2, 0.6, 1.0),
+    vec3(1.0, 0.0, 0.0)
+};
+
+bool vec3GreaterThan(vec3 a, vec3 b)
+{
+    return (a.x > b.x && a.y > b.y && a.z > b.z);
+}
+
+bool intersectBound(vec3 origin, vec3 dir, int i)
+{
+    vec3 vmin = vec3(box[i].xmin, box[i].ymin, box[i].zmin);
+    vec3 vmax = vec3(box[i].xmax, box[i].ymax, box[i].zmax);
+    if (vec3GreaterThan(origin, vmin) && vec3GreaterThan(vmax, origin))
+        return true;
+    vec3 tMin = (vmin - origin) / dir;
+    vec3 tMax = (vmax - origin) / dir;
+    vec3 t1 = min(tMin, tMax);
+    vec3 t2 = max(tMin, tMax);
+    float tNear = max(max(t1.x, t1.y), t1.z);
+    float tFar = min(min(t2.x, t2.y), t2.z);
+    return (tNear > 0.0 && tNear < tFar);
+}
+
+bool intersectTriangle(vec3 origin, vec3 dir, int ptr, out float dist)
+{
+    vec3 a = vec3(data[ptr], data[ptr + 1], data[ptr + 2]);
+    vec3 b = vec3(data[ptr + 3], data[ptr + 4], data[ptr + 5]);
+    vec3 c = vec3(data[ptr + 6], data[ptr + 7], data[ptr + 8]);
+    vec3 e1 = b - a;
+    vec3 e2 = c - a;
+    vec3 p = cross(dir, e2);
+    float det = dot(e1, p);
+    if (abs(det) < EPS) return false;
+    det = 1.0 / det;
+
+    vec3 t = origin - a;
+    float u = dot(t, p) * det;
+    if (u < 0.0 || u > 1.0) return false;
+    vec3 q = cross(t, e1);
+    float v = dot(dir, q) * det;
+    if (v < 0.0 || u + v > 1.0) return false;
+    dist = dot(e2, q) * det;
+    if (dist > EPS) return true;
+    return false;
+}
+
+void intersectRay(vec3 O, vec3 D, vec3 P, vec3 Q, out float t, out float s)
+{
+    t = ((P.x - O.x) * Q.y + (O.y - P.y) * Q.x) / (D.x * Q.y - D.y * Q.x);
+    s = (O.x - P.x + t * D.x) / Q.x;
+}
+
+vec3 interpolateNormal(vec3 hit_point, hitinfo_t h)
+{
+    vec3 a = vec3(data[h.hit_vptr], data[h.hit_vptr + 1], data[h.hit_vptr + 2]);
+    vec3 b = vec3(data[h.hit_vptr + 3], data[h.hit_vptr + 4], data[h.hit_vptr + 5]);
+    vec3 c = vec3(data[h.hit_vptr + 6], data[h.hit_vptr + 7], data[h.hit_vptr + 8]);
+    vec3 O = a, D = hit_point - a;
+    vec3 P = b, Q = c - b;
+    float t, s;
+    intersectRay(O, D, P, Q, t, s);
+
+    vec3 Na = vec3(data[h.hit_nptr], data[h.hit_nptr + 1], data[h.hit_nptr + 2]);
+    vec3 Nb = vec3(data[h.hit_nptr + 3], data[h.hit_nptr + 4], data[h.hit_nptr + 5]);
+    vec3 Nc = vec3(data[h.hit_nptr + 6], data[h.hit_nptr + 7], data[h.hit_nptr + 8]);
+    vec3 Nt = normalize(mix(Nb, Nc, s));
+    return normalize(mix(Na, Nt, 1 / t));
+}
+
+bool isIntersected(vec3 origin, vec3 dir, out hitinfo_t h)
+{
+    float dist;
+    bool hit = false;
+    h.t = MAX_SCENE_BOUNDS;
+    for (int i = 0; i < desc.length(); i++)
+    {
+        if (intersectBound(origin, dir, i))
+        {
+            for (int j = desc[i].vptr; j < desc[i].nptr; j += 9)
+            {
+                if (intersectTriangle(origin, dir, j, dist))
+                {
+                    hit = true;
+                    if (h.t > dist)
+                    {
+                        h.t = dist;
+                        h.hit_mesh = i;
+                        h.hit_vptr = j;
+                        h.hit_nptr = j - desc[i].vptr + desc[i].nptr;
+                    }
+                }
+            }
+        }
+    }
+    return hit;
+}
+
+const int MAX_TRACE = 4;
+
+struct trace_state_t
+{
+    vec3 origin;
+    vec3 dir;
+    vec3 color;
+    hitinfo_t h;
+    vec3 hit;
+    vec3 Ld;
+    vec3 N;
+};
+
+vec3 trace(vec3 origin, vec3 dir)
+{
+    trace_state_t stack[MAX_TRACE + 1];
+    bool fallback[MAX_TRACE + 1];
+    int sp = 0;
+
+    hitinfo_t hl;
+    float specular_factor, LdN;
+
+    stack[sp].origin = origin;
+    stack[sp].dir = dir;
+    stack[sp].color = vec3(0, 0, 0);
+    fallback[sp] = false;
+
+    vec3 ambient_contribution;
+    vec3 specular_contribution;
+    vec3 reflection_contribution;
+    vec3 R;
+
+    while (sp >= 0)
+    {
+        if (sp >= MAX_TRACE)
+        {
+            sp--;
+        }
+        else if (fallback[sp])
+        {
+            ambient_contribution = materials[desc[stack[sp].h.hit_mesh].material_id].Ka * ambient;
+            reflection_contribution = materials[desc[stack[sp].h.hit_mesh].material_id].Kr * stack[sp + 1].color;
+            if (isIntersected(stack[sp].hit, stack[sp].Ld, hl))
+            {
+                stack[sp].color =
+                    ambient_contribution + reflection_contribution;
+            }
+            else
+            {
+                float LdN = dot(stack[sp].Ld, stack[sp].N);
+                if (LdN < 0.0) LdN = 0.0;
+                R = normalize(2 * LdN * stack[sp].N - stack[sp].Ld);
+                specular_factor = dot(R, -stack[sp].dir);
+                specular_contribution = vec3(0, 0, 0);
+                if (specular_factor > 0)
+                {
+                    specular_contribution = materials[desc[stack[sp].h.hit_mesh].material_id].Ks * pow(specular_factor, materials[desc[stack[sp].h.hit_mesh].material_id].shininess) * specular;
+                }
+                stack[sp].color = ambient_contribution + materials[desc[stack[sp].h.hit_mesh].material_id].Kd * LdN * intensity + specular_contribution + reflection_contribution;
+            }
+            sp--;
+        }
+        else
+        {
+            if (isIntersected(stack[sp].origin, stack[sp].dir, stack[sp].h))
+            {
+                stack[sp].hit = stack[sp].origin + stack[sp].h.t * stack[sp].dir;
+                stack[sp].Ld = normalize(lightpos - stack[sp].hit);
+                stack[sp].N = interpolateNormal(stack[sp].hit, stack[sp].h);
+                fallback[sp++] = true;
+                stack[sp].origin = stack[sp - 1].hit;
+                stack[sp].dir = normalize(stack[sp - 1].dir - 2 * dot(stack[sp - 1].dir, stack[sp - 1].N) * stack[sp - 1].N);
+                stack[sp].color = vec3(0, 0, 0);
+                fallback[sp] = false;
+            }
+            else sp--;
+        }
+
+    }
+
+    return stack[0].color;
+}
+
+layout(local_size_x = 16, local_size_y = 8) in;
+void main(void)
+{
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(framebuffer);
+    if (pix.x >= size.x || pix.y >= size.y)
+    {
+        return;
+    }
+    vec2 pos = vec2(pix.x + sample_offset.x, pix.y + sample_offset.y) / vec2(size.x - 1, size.y - 1);
+    vec3 dir = mix(mix(ray00, ray01, pos.y), mix(ray10, ray11, pos.y), pos.x);
+    vec3 color = trace(eye, normalize(dir));
+
+    imageStore(framebuffer, pix, mix(imageLoad(framebuffer, pix), vec4(color.rgb, 1.0), 1.0 / float(frame)));
+}

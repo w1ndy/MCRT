@@ -4,15 +4,20 @@
 #include <vector>
 #include <map>
 
-struct Material
+struct MaterialData
 {
-	std::string name;
-	int illum;
 	float diffuse[3];
 	float ambient[3];
 	float specular[3];
 	float specularExponent;
 	float transparency;
+};
+
+struct Material
+{
+	std::string name;
+	int illum;
+	MaterialData data;
 };
 
 class MaterialLibrary

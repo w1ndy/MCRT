@@ -56,26 +56,26 @@ bool MaterialLibrary::readFromMtlFile(const char *mtlFileName)
 				fin >> currentMat->illum;
 			}
 			else if (op == "Kd") {
-				fin >> currentMat->diffuse[0] >> currentMat->diffuse[1]
-					>> currentMat->diffuse[2];
+				fin >> currentMat->data.diffuse[0] >> currentMat->data.diffuse[1]
+					>> currentMat->data.diffuse[2];
 			}
 			else if (op == "Ka") {
-				fin >> currentMat->ambient[0] >> currentMat->ambient[1]
-					>> currentMat->ambient[2];
+				fin >> currentMat->data.ambient[0] >> currentMat->data.ambient[1]
+					>> currentMat->data.ambient[2];
 			}
 			else if (op == "Ks") {
-				fin >> currentMat->specular[0] >> currentMat->specular[1]
-					>> currentMat->specular[2];
+				fin >> currentMat->data.specular[0] >> currentMat->data.specular[1]
+					>> currentMat->data.specular[2];
 			}
 			else if (op == "Tr") {
-				fin >> currentMat->transparency;
+				fin >> currentMat->data.transparency;
 			}
 			else if (op == "d") {
-				fin >> currentMat->transparency;
-				currentMat->transparency = 1 - currentMat->transparency;
+				fin >> currentMat->data.transparency;
+				currentMat->data.transparency = 1 - currentMat->data.transparency;
 			}
 			else if (op == "Ns") {
-				fin >> currentMat->specularExponent;
+				fin >> currentMat->data.specularExponent;
 			}
 			else {
 				cout << "Warn: undefined material operator: "

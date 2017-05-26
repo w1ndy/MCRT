@@ -11,6 +11,7 @@
 #include <locale>
 
 using namespace std;
+using namespace Eigen;
 
 template<typename Out>
 inline void split(const string &s, char delim, Out result)
@@ -79,9 +80,12 @@ bool Scene::readFromObjFile(const char * objFileName)
 		return false;
 	}
 
-	SceneGroup *currentGroup = nullptr;
-	Vertex3f v;
-	TextureCoord c;
+	_groups.push_back(SceneGroup());
+	SceneGroup *currentGroup = &_groups[0];
+	currentGroup->name = "default";
+
+	Vector3f v;
+	Vector2f c;
 	bool smoothMode = false;
 	Material *mat = nullptr;
 	string op, arg;
@@ -98,12 +102,15 @@ bool Scene::readFromObjFile(const char * objFileName)
 			_matLib.readFromMtlFile(arg.c_str());
 		}
 		else if (op == "g") {
-			_groups.push_back(SceneGroup());
-			currentGroup = &_groups[_groups.size() - 1];
-			fin >> currentGroup->name;
+			fin >> arg;
+			if (!currentGroup || currentGroup->name != arg) {
+				_groups.push_back(SceneGroup());
+				currentGroup = &_groups[_groups.size() - 1];
+				currentGroup->name = arg;
+			}
 		}
 		else if (op == "v") {
-			fin >> v.x >> v.y >> v.z;
+			fin >> v[0] >> v[1] >> v[2];
 			_vertices.push_back(v);
 			if (currentGroup) {
 				currentGroup->vertices.push_back(
@@ -111,7 +118,7 @@ bool Scene::readFromObjFile(const char * objFileName)
 			}
 		}
 		else if (op == "vt") {
-			fin >> c.u >> c.v;
+			fin >> c[0] >> c[1];
 			_textureCoords.push_back(c);
 			if (currentGroup) {
 				currentGroup->textureCoords.push_back(
@@ -119,7 +126,7 @@ bool Scene::readFromObjFile(const char * objFileName)
 			}
 		}
 		else if (op == "vn") {
-			fin >> v.x >> v.y >> v.z;
+			fin >> v[0] >> v[1] >> v[2];
 			_normals.push_back(v);
 			if (currentGroup) {
 				currentGroup->normals.push_back(
@@ -150,8 +157,10 @@ bool Scene::readFromObjFile(const char * objFileName)
 			f.v1 = convertStringToIndex(faceArgs[0][0]);
 			f.vt1 = compNum < 2 ? -1 : convertStringToIndex(faceArgs[0][1]);
 			f.vn1 = compNum < 3 ? -1 : convertStringToIndex(faceArgs[0][2]);
-			f.smooth = smoothMode;
-			f.mat = mat;
+			if (currentGroup) {
+				currentGroup->smooth = smoothMode;
+				currentGroup->mat = mat;
+			}
 			for (int i = 1; i + 1 < faceArgs.size(); i++) {
 				assert(faceArgs[i].size() == compNum &&
 					faceArgs[i + 1].size() == compNum &&
@@ -177,4 +186,76 @@ bool Scene::readFromObjFile(const char * objFileName)
 
 	return false;
 }
+
+void Scene::computeNormals()
+{
+	if (_normals.size()) return;
+
+	for (auto &v : _vertices) {
+		_normals.push_back(Vector3f(0, 0, 0));
+	}
+
+	int *count = new int[_normals.size()];
+	memset(count, 0, sizeof(int) * _normals.size());
+
+	for (auto &f : _faces) {
+		Vector3f u = _vertices[f.v2] - _vertices[f.v1];
+		Vector3f v = _vertices[f.v3] - _vertices[f.v1];
+		Vector3f n = u.cross(v).normalized();
+		_normals[f.v1] += n;
+		_normals[f.v2] += n;
+		_normals[f.v3] += n;
+		count[f.v1]++;
+		count[f.v2]++;
+		count[f.v3]++;
+		f.vn1 = f.v1;
+		f.vn2 = f.v2;
+		f.vn3 = f.v3;
+	}
+	for (int i = 0; i < _normals.size(); i++) {
+		if (count[i]) _normals[i] /= count[i];
+	}
+	delete count;
+}
+
+void Scene::getGroupBuffers(int **grpBuf, float **vtxBuf, float **matBuf)
+{
+	const int VerticesPerFace = 3;
+	const int FloatsPerVertex = 3;
+	const int FloatsPerMaterial = 11;
+	const int GroupBufferStride = 4;
+
+	int countFloatInVbuf = 0, countFloatInMbuf = 0;
+	*grpBuf = new int[GroupBufferStride * _groups.size()];
+	for (int i = 0; i < _groups.size(); i++) {
+		int offset = FloatsPerVertex * VerticesPerFace * _groups[i].faces.size();
+		(*grpBuf)[i * GroupBufferStride] = countFloatInVbuf;
+		countFloatInVbuf += offset;
+		(*grpBuf)[i * GroupBufferStride + 1] = countFloatInVbuf;
+		countFloatInVbuf += offset;
+		(*grpBuf)[i * GroupBufferStride + 2] = offset / FloatsPerVertex;
+		(*grpBuf)[i * GroupBufferStride + 3] = countFloatInMbuf;
+		countFloatInMbuf += FloatsPerMaterial;
+	}
+	*vtxBuf = new float[countFloatInVbuf];
+	*matBuf = new float[countFloatInMbuf];
+	int vbptr = 0, mbptr = 0;
+	for (auto &g : _groups) {
+		for (auto &f : g.faces) {
+			memcpy(*vtxBuf + vbptr, _vertices[f->v1].data(), 3 * sizeof(float));
+			memcpy(*vtxBuf + vbptr + 3, _vertices[f->v2].data(), 3 * sizeof(float));
+			memcpy(*vtxBuf + vbptr + 6, _vertices[f->v3].data(), 3 * sizeof(float));
+			vbptr += FloatsPerVertex * VerticesPerFace;
+		}
+		for (auto &f : g.faces) {
+			memcpy(*vtxBuf + vbptr, _normals[f->vn1].data(), 3 * sizeof(float));
+			memcpy(*vtxBuf + vbptr + 3, _normals[f->vn2].data(), 3 * sizeof(float));
+			memcpy(*vtxBuf + vbptr + 6, _normals[f->vn3].data(), 3 * sizeof(float));
+			vbptr += FloatsPerVertex * VerticesPerFace;
+		}
+		memcpy(*matBuf + mbptr, &(g.mat->data), sizeof(MaterialData));
+		mbptr += FloatsPerMaterial;
+	}
+}
+
 

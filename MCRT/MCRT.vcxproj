@@ -124,10 +124,14 @@
     <ClInclude Include="MaterialLibrary.h" />
     <ClInclude Include="Scene.h" />
     <ClInclude Include="Tracer.h" />
+    <ClInclude Include="Types.h" />
     <ClInclude Include="Vector.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="quad.frag" />
+    <None Include="quad.vert" />
+    <None Include="trace.comp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
