@@ -126,8 +126,9 @@ void Tracer::_onUpdating()
 
 	auto end = chrono::steady_clock::now();
 	auto ms = chrono::duration<double, milli>(end - start).count();
-	cout << "Frame #" << _frames << " costs "
-		<< ms << " ms, est " << (1000.0 / ms) << " fps, error " << glGetError() << endl;
+	if (_frames % 500 == 0) 
+		cout << "Frame #" << _frames << " costs "
+			<< ms << " ms, est " << (1000.0 / ms) << " fps, error " << glGetError() << endl;
 }
 
 void Tracer::_onResized(int width, int height)
