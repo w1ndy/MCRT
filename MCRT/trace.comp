@@ -1,4 +1,5 @@
 #version 430 core
+#pragma optimize (off)
 
 layout(binding = 0, rgba32f) uniform image2D framebuffer;
 
@@ -16,69 +17,47 @@ uniform int frame;
 const vec3 lightpos = vec3(-1.5, -1.5, 2.5);
 
 const vec3 intensity = vec3(0.8, 0.8, 0.8);
-const vec3 ambient = vec3(0.2, 0.2, 0.2);
+const vec3 ambient = vec3(1.0, 1.0, 1.0);
 const vec3 specular = vec3(0.75, 0.75, 0.75);
-
-struct bbox_t
-{
-	vec3 vmin;
-	vec3 vmax;
-};
 
 struct group_t
 {
-    int vptr;
-    int nptr;
-    int num_vertices;
-    int material_id;
+	int fptr;
+	int flen;
+	int _padding[2];
+	vec4 vmin;
+	vec4 vmax;
 };
 
-struct material_t
+struct face_t
 {
-	vec3 Kd;
-	vec3 Ka;
-	vec3 Ks;
+    vec4 v1, v2, v3;
+	vec4 vn1, vn2, vn3;
+
+	vec4 Kd, Ka, Ks;
 	float Ns;
 	float Tr;
+	float _padding[2];
 };
 
-layout(std430, binding = 1) buffer Materials
-{
-    material_t materials[];
-};
 
-layout(std430, binding = 2) buffer BoundingBoxes
-{
-    bbox_t bboxes[];
-};
-
-layout(std430, binding = 3) buffer Groups
+layout(std430, binding = 1) buffer Groups
 {
     group_t groups[];
 };
 
-layout(std430, binding = 4) buffer Vertices
+layout(std430, binding = 2) buffer Faces
 {
-    float vertices[];
+    face_t faces[];
 };
 
-const int MAX_TRACE = 4;
+const int MAX_TRACE = 5;
 
-struct hitinfo_t
+struct hit_info_t
 {
-    float t;
-    int target;
-};
-
-struct trace_state_t
-{
-    vec3 origin;
-    vec3 dir;
-    vec3 color;
-    hitinfo_t h;
-    vec3 hit;
-    vec3 Ld;
-    vec3 N;
+    float dist;
+    int gptr;
+	int fptr;
 };
 
 bool vec3GreaterThan(vec3 a, vec3 b)
@@ -86,12 +65,15 @@ bool vec3GreaterThan(vec3 a, vec3 b)
     return (a.x > b.x && a.y > b.y && a.z > b.z);
 }
 
-bool intersectBoundingBox(vec3 origin, vec3 dir, bbox_t bbox)
+bool intersectBoundingBox(vec3 origin, vec3 dir, group_t group)
 {
-    if (vec3GreaterThan(origin, bbox.vmin) && vec3GreaterThan(bbox.vmax, origin))
+	vec3 vmin = group.vmin.xyz;
+	vec3 vmax = group.vmax.xyz;
+
+    if(vec3GreaterThan(origin, vmin) && vec3GreaterThan(vmax, origin))
         return true;
-    vec3 tMin = (bbox.vmin - origin) / dir;
-    vec3 tMax = (bbox.vmax - origin) / dir;
+    vec3 tMin = (vmin - origin) / dir;
+    vec3 tMax = (vmax - origin) / dir;
     vec3 t1 = min(tMin, tMax);
     vec3 t2 = max(tMin, tMax);
     float tNear = max(max(t1.x, t1.y), t1.z);
@@ -99,23 +81,166 @@ bool intersectBoundingBox(vec3 origin, vec3 dir, bbox_t bbox)
     return (tNear > 0.0 && tNear < tFar);
 }
 
-bool isIntersected(vec3 origin, vec3 dir, out hitinfo_t h)
+bool intersectTriangleFace(vec3 origin, vec3 dir, face_t face, out float dist)
 {
-	h.t = MAX_SCENE_BOUNDS;
-	for (int i = 0; i < groups.length(); i++) {
-		if (intersectBoundingBox(origin, dir, bboxes[i])) {
-			return true;
-		}
-	}
+	vec3 a = face.v1.xyz;
+    vec3 e1 = face.v2.xyz - a;
+    vec3 e2 = face.v3.xyz - a;
+    vec3 p = cross(dir, e2);
+    float det = dot(e1, p);
+    if(abs(det) < EPS) return false;
+    det = 1.0 / det;
+
+    vec3 t = origin - a;
+    float u = dot(t, p) * det;
+    if(u < -EPS || u > 1.0 + EPS) return false;
+    vec3 q = cross(t, e1);
+    float v = dot(dir, q) * det;
+    if(v < -EPS || u + v > 1.0 + EPS) return false;
+    dist = dot(e2, q) * det;
+    if(dist > EPS) return true;
+    return false;
 }
+
+bool isIntersected(vec3 origin, vec3 dir, out hit_info_t h)
+{
+    float dist;
+    bool hit = false;
+    h.dist = MAX_SCENE_BOUNDS;
+    for(int i = 0; i < groups.length(); i++) {
+        if(intersectBoundingBox(origin, dir, groups[i])) {
+			for (int j = 0; j < groups[i].flen; j++) {
+				if (intersectTriangleFace(origin, dir, faces[groups[i].fptr + j], dist)
+						&& dist > EPS && dist < h.dist) {
+					h.gptr = i;
+					h.fptr = groups[i].fptr + j;
+					h.dist = dist;
+				}
+			}
+        }
+    }
+    return h.dist != MAX_SCENE_BOUNDS;
+}
+
+bool FAIL = false;
+float getTriangleAreaBySides(float A, float B, float C)
+{
+	float p = (A + B + C) / 2;
+	return sqrt(p * (p - A) * (p - B) * (p - C));
+}
+
+float getTriangleArea(vec3 pA, vec3 pB, vec3 pC)
+{
+	return getTriangleAreaBySides(length(pB - pA), length(pC - pB), length(pA - pC));
+}
+
+vec3 getNormal(vec3 hit_point, face_t face)
+{
+	vec3 pA = face.v1.xyz;
+	vec3 pB = face.v2.xyz;
+	vec3 pC = face.v3.xyz;
+
+	float a = getTriangleArea(pB, pC, hit_point);
+	float b = getTriangleArea(pA, pC, hit_point);
+	float c = getTriangleArea(pA, pB, hit_point);
+
+	return normalize(a * face.vn1.xyz + b * face.vn2.xyz + c * face.vn3.xyz);
+}
+
+int seed = 0;
+float rand()
+{
+	seed += 1;
+	return fract(sin(dot(vec2(seed, seed), vec2(12.9898,78.233))) * 43758.5453);
+}
+
+vec3 sampleHemisphere(vec3 w)
+{
+	float r1 = 2.0f * 3.14159f * rand();
+	float r2 = rand();
+	float r2s = sqrt(r2);
+
+	vec3 u;
+	if (abs(w[0]) > 0.1f) u = cross(vec3(0, 1, 0), w);
+	else u = cross(vec3(1, 0, 0), w);
+	u = normalize(u);
+
+	vec3 v = cross(w, u);
+	vec3 d = (u * cos(r1) * r2s + v * sin(r1) * r2s + w * sqrt(1 - r2));
+
+	return normalize(d);
+}
+
+struct trace_state_t {
+	vec3 origin;
+	vec3 dir;
+	hit_info_t h;
+	vec3 hP;
+	vec3 hN;
+	bool running;
+	int iter;
+	vec3 color;
+	vec3 reflection;
+};
 
 vec3 trace(vec3 origin, vec3 dir)
 {
-	hitinfo_t h;
-	if (isIntersected(origin, dir, h)) {
-		return vec3(1.0, 1.0, 1.0);
+	trace_state_t S[MAX_TRACE];
+	int sp = 0;
+
+	S[0].origin = origin;
+	S[0].dir = dir;
+	S[0].running = false;
+
+	while (sp >= 0) {
+		if (!S[sp].running) {
+			S[sp].running = true;
+			S[sp].iter = 20;
+			S[sp].reflection = vec3(0, 0, 0);
+			if (isIntersected(S[sp].origin, S[sp].dir, S[sp].h)) {
+				S[sp].hP = S[sp].origin + S[sp].dir * S[sp].h.dist;
+				S[sp].hN = getNormal(S[sp].hP, faces[S[sp].h.fptr]);
+				S[sp].color = faces[S[sp].h.fptr].Ka.rgb;
+				//if (abs(S[sp].hN.y - 1) < EPS) return vec3(0, 0, 1);
+				if (sp < MAX_TRACE - 1) {
+					S[sp + 1].origin = S[sp].hP;
+					//S[sp + 1].dir = normalize(S[sp].dir - 2 * dot(S[sp].dir, S[sp].hN) * S[sp].hN);
+					S[sp + 1].dir = sampleHemisphere(S[sp].hN);
+					S[sp + 1].running = false;
+					sp += 1;
+				} else {
+					S[sp].color = vec3(0, 0, 0);
+					sp -= 1;
+				}
+			} else {
+				S[sp].color = vec3(0, 0, 0);
+				sp -= 1;
+			}
+		} else {
+			// float LdN = dot(S[sp + 1].dir, S[sp].hN);
+			// if (LdN < EPS) {
+			// 	LdN = 0.0;
+			// }
+			if (S[sp].iter > 0) {
+				S[sp].iter--;
+				S[sp].reflection += S[sp + 1].color * faces[S[sp].h.fptr].Kd.rgb;
+				S[sp + 1].origin = S[sp].hP;
+				//S[sp + 1].dir = normalize(S[sp].dir - 2 * dot(S[sp].dir, S[sp].hN) * S[sp].hN);
+				S[sp + 1].dir = sampleHemisphere(S[sp].hN);
+				S[sp + 1].running = false;
+				sp += 1;
+			} else {
+				S[sp].color += S[sp].reflection / 20;
+			}
+			//if (length(S[sp + 1].color) < EPS) return vec3(0, 1, 0);
+			//S[sp].color = faces[S[sp].h.fptr].Ka.xyz * ambient + faces[S[sp].h.fptr].Kd.xyz * LdN * S[sp + 1].color;
+				//+ faces[S[sp].h.fptr].Kd.xyz * LdN * S[sp + 1].color;
+			sp -= 1;
+		}
 	}
-	return vec3(0, 0, 0);
+	//if (S[1].h.gptr == S[0].h.gptr) return vec3(1, 0, 0);
+	//else
+	return S[0].color;
 }
 
 layout(local_size_x = 16, local_size_y = 8) in;
@@ -131,6 +256,10 @@ void main(void)
     vec3 dir = mix(mix(ray00, ray01, pos.y), mix(ray10, ray11, pos.y), pos.x);
     vec3 color = trace(eye, normalize(dir));
 
-	imageStore(framebuffer, pix, vec4(1.0, 1.0, 1.0, 1.0));
-    //imageStore(framebuffer, pix, mix(imageLoad(framebuffer, pix), vec4(color.rgb, 1.0), 1.0 / float(frame)));
+	if (FAIL) {
+		imageStore(framebuffer, pix, vec4(1.0, 0, 0, 1.0));
+	} else {
+    	imageStore(framebuffer, pix, mix(imageLoad(framebuffer, pix), vec4(color.rgb, 1.0), 1.0 / float(frame)));
+	}
+	//imageStore(framebuffer, pix, vec4(color.rgb, 1.0));
 }

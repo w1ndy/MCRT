@@ -11,6 +11,8 @@ struct MaterialData
 	float specular[3];
 	float specularExponent;
 	float transparency;
+
+	MaterialData() : diffuse{ 0. }, ambient{ 0. }, specular{ 0. }, specularExponent(0), transparency(1.0) {};
 };
 
 struct Material

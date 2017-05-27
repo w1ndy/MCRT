@@ -12,6 +12,21 @@ using namespace Eigen;
 
 Tracer *Tracer::_instance;
 
+void dumpGLErrors(const char *operation)
+{
+	GLenum err = glGetError();
+	if (err == GL_NO_ERROR) {
+		cout << operation << " finished with no errors." << endl;
+	}
+	else {
+		cout << operation << " finished with following errors:";
+		do {
+			cout << " " << gluErrorString(err);
+		} while ((err = glGetError()) != GL_NO_ERROR);
+		cout << endl;
+	}
+}
+
 Tracer::Tracer(int &argc, char *argv[]) : _canvas(0), _frames(0)
 {
 	glutInit(&argc, argv);
@@ -32,6 +47,7 @@ Tracer::Tracer(int &argc, char *argv[]) : _canvas(0), _frames(0)
 	glutDisplayFunc(_displayFn);
 	glutReshapeFunc(_resizeFn);
 	glutIdleFunc(_idleFn);
+	dumpGLErrors("glutInitialization");
 
 	Tracer::_instance = this;
 }
@@ -40,9 +56,13 @@ void Tracer::run(Scene &s)
 {
 	cout << "MCRT has started." << endl;
 	_buildSSBOs(s);
+	dumpGLErrors("_buildSSBOs");
 	_buildVertexArray();
+	dumpGLErrors("_buildVertexArray");
 	_loadShaders();
+	dumpGLErrors("_loadShaders");
 	_initShaders();
+	dumpGLErrors("_initShaders");
 
 	glClearColor(0, 0, 0, 1);
 	glEnable(GL_DEPTH_TEST);
@@ -76,10 +96,9 @@ void Tracer::_onUpdating()
 	auto start = chrono::steady_clock::now();
 
 	glUseProgram(_computeProgram);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, _ssbo.materials);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, _ssbo.bboxes);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, _ssbo.groups);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, _ssbo.vertices);
+
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, _ssbo.groups);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, _ssbo.faces);
 
 	glUniform3f(_variables.eye, _cop[0], _cop[1], _cop[2]);
 	glUniform3f(_variables.ray00, _ray00[0], _ray00[1], _ray00[2]);
@@ -108,7 +127,7 @@ void Tracer::_onUpdating()
 	auto end = chrono::steady_clock::now();
 	auto ms = chrono::duration<double, milli>(end - start).count();
 	cout << "Frame #" << _frames << " costs "
-		<< ms << " ms, est " << (1000.0 / ms) << " fps" << endl;
+		<< ms << " ms, est " << (1000.0 / ms) << " fps, error " << glGetError() << endl;
 }
 
 void Tracer::_onResized(int width, int height)
@@ -122,10 +141,10 @@ void Tracer::_onResized(int width, int height)
 	float aspect = height != 0 ? float(width) / float(height) : width;
 
 	glViewport(0, 0, width, height);
-	_setFrustum(60, aspect, 1., 20.);
+	_setFrustum(60, aspect, 1., 30.);
 	_setCamera(
-		Vector3f(0, 0, 10),
-		Vector3f(0, 0, -1),
+		Vector3f(0, 5, 15),
+		Vector3f(0, 5, 0),
 		Vector3f(0, 1, 0));
 	_computeInvMatrix();
 	_buildCanvas();
@@ -133,7 +152,7 @@ void Tracer::_onResized(int width, int height)
 
 void Tracer::_onIdle()
 {
-	//glutPostRedisplay();
+	glutPostRedisplay();
 }
 
 void Tracer::_setFrustum(float fovy, float aspect, float zNear, float zFar)
@@ -145,6 +164,8 @@ void Tracer::_setFrustum(float fovy, float aspect, float zNear, float zFar)
 				0, zNear / halfH, 0, 0,
 				0, 0, (zFar + zNear) / zL, 2.0f * zFar * zNear / zL,
 				0, 0, -1, 0;
+	//cout << "Projection Matrix:" << endl
+	//	<< _projMat << endl;
 }
 
 void Tracer::_setCamera(const Vector3f &eye, const Vector3f &at, const Vector3f &up)
@@ -157,15 +178,23 @@ void Tracer::_setCamera(const Vector3f &eye, const Vector3f &at, const Vector3f 
 				un(0), un(1), un(2), -un.dot(eye),
 				-dn(0), -dn(1), -dn(2), dn.dot(eye),
 				0, 0, 0, 1;
+	//cout << "View Matrix:" << endl
+	//	<< _viewMat << endl;
 }
 
 void Tracer::_computeInvMatrix()
 {
-	_invMat = (_projMat * _viewMat).reverse();
+	_invMat = (_projMat * _viewMat).inverse();
+	//cout << "Inverse PV Matrix" << endl
+	//	<< _invMat << endl;
 	_ray00 = _getRayVector(-1, -1);
+	//cout << "Ray00: " << endl << _ray00 << endl;
 	_ray01 = _getRayVector(-1, 1);
+	//cout << "Ray01: " << endl << _ray01 << endl;
 	_ray10 = _getRayVector(1, -1);
+	//cout << "Ray10: " << endl << _ray10 << endl;
 	_ray11 = _getRayVector(1, 1);
+	//cout << "Ray11: " << endl << _ray11 << endl;
 }
 
 void Tracer::_buildCanvas()
@@ -206,25 +235,19 @@ GLuint createSSBO(void *buffer, size_t size)
 
 void Tracer::_buildSSBOs(Scene &s)
 {
-	int *grpBuf;
-	float *vtxBuf, *bboxBuf, *matBuf;
-	size_t grpBufLen, vtxBufLen, bboxBufLen, matBufLen;
+	group_t *grpBuf;
+	face_t *faceBuf;
+	size_t grpBufLen, faceBufLen;
 
 	s.getGroupBuffers(
 		&grpBuf, &grpBufLen,
-		&vtxBuf, &vtxBufLen,
-		&bboxBuf, &bboxBufLen,
-		&matBuf, &matBufLen);
+		&faceBuf, &faceBufLen);
 
-	_ssbo.groups = createSSBO((void *)grpBuf, grpBufLen * sizeof(int));
-	_ssbo.vertices = createSSBO((void *)vtxBuf, vtxBufLen * sizeof(float));
-	_ssbo.bboxes = createSSBO((void *)bboxBuf, bboxBufLen * sizeof(float));
-	_ssbo.materials = createSSBO((void *)matBuf, matBufLen * sizeof(float));
+	_ssbo.groups = createSSBO((void *)grpBuf, grpBufLen * sizeof(group_t));
+	_ssbo.faces = createSSBO((void *)faceBuf, faceBufLen * sizeof(face_t));
 
 	delete grpBuf;
-	delete vtxBuf;
-	delete bboxBuf;
-	delete matBuf;
+	delete faceBuf;
 }
 
 GLuint compileShader(const char *fname, GLenum type)
@@ -304,7 +327,7 @@ Vector3f Tracer::_getRayVector(float x, float y)
 	r[0] /= r[3];
 	r[1] /= r[3];
 	r[2] /= r[3];
-	return Vector3f(r[0], r[1], r[2]);
+	return Vector3f(r[0], r[1], r[2]) - _cop;
 }
 
 void Tracer::_displayFn()

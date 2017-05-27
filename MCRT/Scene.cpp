@@ -161,10 +161,6 @@ bool Scene::readFromObjFile(const char * objFileName)
 			size_t faceNum = faceArgs.size();
 			size_t compNum = faceArgs[0].size();
 			assert(faceNum >= 3 && compNum >= 1 && "invalid face description");
-			if (currentGroup) {
-				currentGroup->smooth = smoothMode;
-				currentGroup->mat = mat;
-			}
 			for (size_t i = 1; i + 1 < faceArgs.size(); i++) {
 				assert(faceArgs[i].size() == compNum &&
 					faceArgs[i + 1].size() == compNum &&
@@ -179,6 +175,8 @@ bool Scene::readFromObjFile(const char * objFileName)
 				f->vn1 = compNum < 3 ? -1 : convertStringToIndex(faceArgs[0][2]);
 				f->vn2 = compNum < 3 ? -1 : convertStringToIndex(faceArgs[i][2]);
 				f->vn3 = compNum < 3 ? -1 : convertStringToIndex(faceArgs[i + 1][2]);
+				f->smooth = smoothMode;
+				f->mat = mat;
 				_faces.push_back(f);
 				if (currentGroup) {
 					currentGroup->faces.push_back(f);
@@ -227,10 +225,8 @@ void Scene::computeNormals()
 }
 
 void Scene::getGroupBuffers(
-	int **grpBuf, size_t *grpBufLen,
-	float **vtxBuf, size_t *vtxBufLen,
-	float **bboxBuf, size_t *bboxBufLen,
-	float **matBuf, size_t *matBufLen)
+	group_t **grpBuf, size_t *grpBufLen,
+	face_t **faceBuf, size_t *faceBufLen)
 {
 	const int VerticesPerFace = 3;
 	const int FloatsPerVertex = 3;
@@ -239,65 +235,35 @@ void Scene::getGroupBuffers(
 
 	MaterialData defaultMat;
 
-	*vtxBufLen = 0, *bboxBufLen = 0, *matBufLen = 0;
+	*faceBufLen = 0;
 
-	*grpBufLen = GroupBufferStride * _groups.size();
-	*grpBuf = new int[*grpBufLen];
+	*grpBufLen = _groups.size();
+	*grpBuf = new group_t[_groups.size()];
 	for (int i = 0; i < _groups.size(); i++) {
-		int offset = FloatsPerVertex * VerticesPerFace * _groups[i]->faces.size();
-		(*grpBuf)[i * GroupBufferStride] = *vtxBufLen;
-		*vtxBufLen += offset;
-		(*grpBuf)[i * GroupBufferStride + 1] = *vtxBufLen;
-		*vtxBufLen += offset;
-		(*grpBuf)[i * GroupBufferStride + 2] = offset / FloatsPerVertex;
-		(*grpBuf)[i * GroupBufferStride + 3] = *matBufLen;
-		*matBufLen += FloatsPerMaterial;
-		*bboxBufLen += 2 * FloatsPerVertex;
+		(*grpBuf)[i].fptr = *faceBufLen;
+		(*grpBuf)[i].flen = _groups[i]->faces.size();
+		*faceBufLen += _groups[i]->faces.size();
 	}
 
-	*vtxBuf = new float[*vtxBufLen];
-	*bboxBuf = new float[*bboxBufLen];
-	*matBuf = new float[*matBufLen];
-
-	for (int i = 0; i < *bboxBufLen; i++) {
-		if (i % 6 < 3) (*bboxBuf)[i] = 999999;
-		else  (*bboxBuf)[i] = -999999;
-	}
+	*faceBuf = new face_t[*faceBufLen];
 
 	int vbptr = 0, bbptr = 0, mbptr = 0;
-	for (auto &g : _groups) {
-		for (auto &f : g->faces) {
-			(*bboxBuf)[bbptr] = min({ (*bboxBuf)[bbptr],
-				_vertices[f->v1]->x(), _vertices[f->v2]->x(), _vertices[f->v3]->x() });
-			(*bboxBuf)[bbptr + 1] = min({ (*bboxBuf)[bbptr + 1],
-				_vertices[f->v1]->y(), _vertices[f->v2]->y(), _vertices[f->v3]->y() });
-			(*bboxBuf)[bbptr + 2] = min({ (*bboxBuf)[bbptr + 2],
-				_vertices[f->v1]->z(), _vertices[f->v2]->z(), _vertices[f->v3]->z() });
-			memcpy(*vtxBuf + vbptr, _vertices[f->v1]->data(), 3 * sizeof(float));
-			memcpy(*vtxBuf + vbptr + 3, _vertices[f->v2]->data(), 3 * sizeof(float));
-			memcpy(*vtxBuf + vbptr + 6, _vertices[f->v3]->data(), 3 * sizeof(float));
-			vbptr += FloatsPerVertex * VerticesPerFace;
+	for (size_t i = 0; i < _groups.size(); i++) {
+		auto *sg = _groups[i];
+		auto *g = &(*grpBuf)[i];
+		for (size_t j = 0; j < sg->faces.size(); j++) {
+			auto *sf = sg->faces[j];
+			auto *f = &(*faceBuf)[g->fptr + j];
+			g->updateBoundingBox(*_vertices[sf->v1], *_vertices[sf->v2], *_vertices[sf->v3]);
+			f->setVertices(*_vertices[sf->v1], *_vertices[sf->v2], *_vertices[sf->v3]);
+			f->setNormals(*_normals[sf->vn1], *_normals[sf->vn2], *_normals[sf->vn3]);
+			if (sf->mat) {
+				f->setMaterial(sf->mat->data);
+			}
+			else {
+				f->setMaterial(defaultMat);
+			}
 		}
-		bbptr += 3;
-		for (auto &f : g->faces) {
-			(*bboxBuf)[bbptr] = max({ (*bboxBuf)[bbptr],
-				_vertices[f->v1]->x(), _vertices[f->v2]->x(), _vertices[f->v3]->x() });
-			(*bboxBuf)[bbptr + 1] = max({ (*bboxBuf)[bbptr + 1],
-				_vertices[f->v1]->y(), _vertices[f->v2]->y(), _vertices[f->v3]->y() });
-			(*bboxBuf)[bbptr + 2] = max({ (*bboxBuf)[bbptr + 2],
-				_vertices[f->v1]->z(), _vertices[f->v2]->z(), _vertices[f->v3]->z() });
-			memcpy(*vtxBuf + vbptr, _normals[f->vn1]->data(), 3 * sizeof(float));
-			memcpy(*vtxBuf + vbptr + 3, _normals[f->vn2]->data(), 3 * sizeof(float));
-			memcpy(*vtxBuf + vbptr + 6, _normals[f->vn3]->data(), 3 * sizeof(float));
-			vbptr += FloatsPerVertex * VerticesPerFace;
-		}
-		bbptr += 3;
-		if (g->mat) {
-			memcpy(*matBuf + mbptr, &(g->mat->data), sizeof(MaterialData));
-		} else {
-			memcpy(*matBuf + mbptr, &defaultMat, sizeof(MaterialData));
-		}
-		mbptr += FloatsPerMaterial;
 	}
 }
 

@@ -40,9 +40,7 @@ private:
 
 	struct SSBOCollection {
 		unsigned int groups;
-		unsigned int vertices;
-		unsigned int bboxes;
-		unsigned int materials;
+		unsigned int faces;
 	} _ssbo;
 
 	struct ShaderVariableCollection {
